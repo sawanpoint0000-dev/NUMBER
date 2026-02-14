@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HACKER PANEL 1.0</title>
+    <style>
+        body { font-family: Arial; background: #1e1e1e; color: #e0e0e0; padding: 15px; max-width: 600px; margin: auto; }
+        h1 { text-align: center; color: #4ecdc4; font-size: 24px; margin-bottom: 10px; }
+        #toggleBtn { width: 100%; padding: 15px; font-size: 18px; font-weight: bold; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; margin-bottom: 10px; }
+        #toggleBtn.off { background: #dc3545; }
+        #status { padding: 12px; margin-bottom: 10px; border-radius: 6px; text-align: center; font-weight: bold; background: #2d2d2d; }
+        .error { background: #442222; color: #ff6b6b; }
+        .buying { background: #1a3a3a; color: #4ecdc4; }
+        #numbers { display: flex; flex-direction: column; gap: 8px; }
+        .numbox { display: flex; align-items: center; background: #2a2a2a; padding: 10px; border-radius: 8px; border: 1px solid #444; position: relative; }
+        .phone10 { flex: 1; font-size: 18px; font-weight: bold; cursor: pointer; }
+        .copybtn { padding: 6px 12px; margin: 0 8px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .copybtn:hover { background: #0056b3; }
+        .otp { padding: 6px 12px; background: #1a1a1a; border: 1px solid #444; border-radius: 4px; min-width: 100px; text-align: center; font-size: 14px; font-weight: bold; }
+        .timer { position: absolute; top: 4px; right: 8px; font-size: 12px; color: #ff9800; background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; font-family: monospace; }
+        .success { background: #28a745 !important; color: white !important; }
+        .expired { opacity: 0; height: 0; margin: 0; padding: 0; overflow: hidden; transition: all 0.5s; }
+    </style>
+</head>
+<body>
+    <h1>HACKER PANEL 1.0</h1>
+
+    <button id="toggleBtn">ON Karo</button>
+    <div id="status">Off hai → ON dabao</div>
+    <div id="numbers"></div>
+
+    <script>
+        const API_KEY = "6fa84c406bc3339299f8804c77d3af23";
+        const BASE_URL = "https://api.grizzlysms.com/stubs/handler_api.php";
+        const SERVICE = "swr";
+        const COUNTRY = "22";
+        const MAX_PRICE = "80";
+
+        let isOn = false;
+        let interval = null;
+
+        const toggleBtn = document.getElementById('toggleBtn');
+        const statusDiv = document.getElementById('status');
+        const numbersDiv = document.getElementById('numbers');
+
+        toggleBtn.onclick = () => {
+            isOn = !isOn;
+            toggleBtn.textContent = isOn ? 'OFF Karo' : 'ON Karo';
+            toggleBtn.classList.toggle('off', !isOn);
+            statusDiv.textContent = isOn ? 'Auto buy shuru...' : 'Off hai';
+            statusDiv.className = isOn ? 'buying' : '';
+            if (isOn) start();
+            else stop();
+        };
+
+        function start() {
+            fetchNumber();
+            interval = setInterval(fetchNumber, 10000);
+        }
+
+        function stop() {
+            clearInterval(interval);
+        }
+
+        function setStatus(msg, err = false) {
+            statusDiv.textContent = msg;
+            statusDiv.className = err ? 'error' : 'buying';
+        }
+
+        function isFreshValid(fullPhone) {
+            fullPhone = fullPhone.trim();
+            if (fullPhone.length !== 12 || !fullPhone.startsWith('91') || !/^\d{12}$/.test(fullPhone)) {
+                console.log('Invalid format:', fullPhone);
+                return false;
+            }
+
+            // Double storage check (local + session)
+            let used = JSON.parse(localStorage.getItem('used_numbers') || '[]');
+            let usedSession = JSON.parse(sessionStorage.getItem('used_numbers_sess') || '[]');
+
+            const allUsed = [...new Set([...used, ...usedSession])];
+
+            if (allUsed.includes(fullPhone)) {
+                console.log('Used number blocked:', fullPhone);
+                return false;
+            }
+
+            // Save in both
+            used.push(fullPhone);
+            usedSession.push(fullPhone);
+            localStorage.setItem('used_numbers', JSON.stringify(used));
+            sessionStorage.setItem('used_numbers_sess', JSON.stringify(usedSession));
+
+            console.log('Fresh number accepted:', fullPhone);
+            return true;
+        }
+
+        function startTimer(box) {
+            let sec = 300;
+            const timer = box.querySelector('.timer');
+            const int = setInterval(() => {
+                sec--;
+                const m = Math.floor(sec / 60).toString().padStart(2, '0');
+                const s = (sec % 60).toString().padStart(2, '0');
+                timer.textContent = `${m}:${s}`;
+                if (sec <= 0) {
+                    clearInterval(int);
+                    timer.textContent = 'Expired';
+                    setTimeout(() => {
+                        box.classList.add('expired');
+                        setTimeout(() => box.remove(), 500);
+                    }, 1000);
+                }
+            }, 1000);
+        }
+
+        async function fetchNumber() {
+            if (!isOn) return;
+            setStatus('Fetching...', false);
+
+            const p = new URLSearchParams({
+                api_key: API_KEY,
+                action: 'getNumber',
+                service: SERVICE,
+                country: COUNTRY,
+                maxPrice: MAX_PRICE
+            });
+
+            try {
+                const res = await fetch(BASE_URL + '?' + p);
+                const txt = (await res.text()).trim();
+
+                if (txt.startsWith('ACCESS_NUMBER')) {
+                    const [_, id, full] = txt.split(':');
+                    const phone = full.trim();
+
+                    if (!isFreshValid(phone)) {
+                        setStatus('Used/Invalid → retry...', true);
+                        return;
+                    }
+
+                    const num10 = phone.slice(2);
+
+                    const box = document.createElement('div');
+                    box.className = 'numbox';
+                    box.innerHTML = `
+                        <div class="phone10" onclick="navigator.clipboard.writeText('${num10}').then(()=>this.nextElementSibling.textContent='Copied!')">${num10}</div>
+                        <button class="copybtn" onclick="navigator.clipboard.writeText('${num10}').then(()=>this.textContent='Copied!')">Copy</button>
+                        <div class="otp">OTP wait...</div>
+                        <div class="timer">05:00</div>
+                    `;
+
+                    numbersDiv.prepend(box);
+                    startTimer(box);
+                    setStatus(`Fresh: ${num10}`, false);
+
+                    const otpEl = box.querySelector('.otp');
+                    const poll = setInterval(async () => {
+                        const q = new URLSearchParams({ api_key: API_KEY, action: 'getStatus', id });
+                        try {
+                            const r = await fetch(BASE_URL + '?' + q);
+                            const t = (await r.text()).trim();
+                            if (t.startsWith('STATUS_OK')) {
+                                otpEl.textContent = t.split(':')[1] || '----';
+                                otpEl.classList.add('success');
+                                clearInterval(poll);
+                            } else if (t !== 'STATUS_WAIT_CODE') {
+                                otpEl.textContent = 'Failed';
+                                clearInterval(poll);
+                            }
+                        } catch {}
+                    }, 2000);
+
+                } else {
+                    setStatus(txt || 'Error', true);
+                }
+            } catch {
+                setStatus('Net error → retry...', true);
+            }
+        }
+    </script>
+</body>
+</html>
