@@ -25,34 +25,55 @@
 </head>
 <body>
     <h1>HACKER PANEL 1.0</h1>
-
     <button id="toggleBtn">ON Karo</button>
     <div id="status">Off hai → ON dabao</div>
     <div id="numbers"></div>
 
     <script>
-        const API_KEY = "6fa84c406bc3339299f8804c77d3af23";
+        const API_KEY = "be0f90185132287cb7b00f6790d7f7bb";
         const BASE_URL = "https://api.grizzlysms.com/stubs/handler_api.php";
         const SERVICE = "swr";
         const COUNTRY = "22";
         const MAX_PRICE = "80";
 
-        let isOn = false;
-        let interval = null;
+        // Sync state keys
+        const STATE_KEY = 'hp_isOn';
+        const USED_KEY = 'hp_used_numbers';
+
+        let isOn = localStorage.getItem(STATE_KEY) === 'true';
+        let usedNumbers = JSON.parse(localStorage.getItem(USED_KEY) || '[]');
 
         const toggleBtn = document.getElementById('toggleBtn');
         const statusDiv = document.getElementById('status');
         const numbersDiv = document.getElementById('numbers');
 
-        toggleBtn.onclick = () => {
-            isOn = !isOn;
+        function updateToggleUI() {
             toggleBtn.textContent = isOn ? 'OFF Karo' : 'ON Karo';
             toggleBtn.classList.toggle('off', !isOn);
             statusDiv.textContent = isOn ? 'Auto buy shuru...' : 'Off hai';
             statusDiv.className = isOn ? 'buying' : '';
-            if (isOn) start();
-            else stop();
+        }
+
+        // Sync from other tabs
+        window.addEventListener('storage', (e) => {
+            if (e.key === STATE_KEY) {
+                isOn = e.newValue === 'true';
+                updateToggleUI();
+                if (isOn) start(); else stop();
+            } else if (e.key === USED_KEY) {
+                usedNumbers = JSON.parse(e.newValue || '[]');
+                // Optional: Refresh numbers list if needed
+            }
+        });
+
+        toggleBtn.onclick = () => {
+            isOn = !isOn;
+            localStorage.setItem(STATE_KEY, isOn);  // This triggers storage event in other tabs
+            updateToggleUI();
+            if (isOn) start(); else stop();
         };
+
+        let interval = null;
 
         function start() {
             fetchNumber();
@@ -65,7 +86,7 @@
 
         function setStatus(msg, err = false) {
             statusDiv.textContent = msg;
-            statusDiv.className = err ? 'error' : 'buying';
+            statusDiv.className = err ? 'error' : (isOn ? 'buying' : '');
         }
 
         function isFreshValid(fullPhone) {
@@ -74,24 +95,13 @@
                 console.log('Invalid format:', fullPhone);
                 return false;
             }
-
-            // Double storage check (local + session)
-            let used = JSON.parse(localStorage.getItem('used_numbers') || '[]');
-            let usedSession = JSON.parse(sessionStorage.getItem('used_numbers_sess') || '[]');
-
-            const allUsed = [...new Set([...used, ...usedSession])];
-
-            if (allUsed.includes(fullPhone)) {
+            if (usedNumbers.includes(fullPhone)) {
                 console.log('Used number blocked:', fullPhone);
                 return false;
             }
-
-            // Save in both
-            used.push(fullPhone);
-            usedSession.push(fullPhone);
-            localStorage.setItem('used_numbers', JSON.stringify(used));
-            sessionStorage.setItem('used_numbers_sess', JSON.stringify(usedSession));
-
+            // Add to used and save (syncs to other tabs)
+            usedNumbers.push(fullPhone);
+            localStorage.setItem(USED_KEY, JSON.stringify(usedNumbers));
             console.log('Fresh number accepted:', fullPhone);
             return true;
         }
@@ -117,8 +127,7 @@
 
         async function fetchNumber() {
             if (!isOn) return;
-            setStatus('Fetching...', false);
-
+            setStatus('Fetching number...', false);
             const p = new URLSearchParams({
                 api_key: API_KEY,
                 action: 'getNumber',
@@ -126,22 +135,18 @@
                 country: COUNTRY,
                 maxPrice: MAX_PRICE
             });
-
             try {
                 const res = await fetch(BASE_URL + '?' + p);
                 const txt = (await res.text()).trim();
-
+                console.log('API Response:', txt);
                 if (txt.startsWith('ACCESS_NUMBER')) {
                     const [_, id, full] = txt.split(':');
                     const phone = full.trim();
-
                     if (!isFreshValid(phone)) {
-                        setStatus('Used/Invalid → retry...', true);
+                        setStatus('Used ya Invalid → retry...', true);
                         return;
                     }
-
                     const num10 = phone.slice(2);
-
                     const box = document.createElement('div');
                     box.className = 'numbox';
                     box.innerHTML = `
@@ -150,35 +155,45 @@
                         <div class="otp">OTP wait...</div>
                         <div class="timer">05:00</div>
                     `;
-
                     numbersDiv.prepend(box);
                     startTimer(box);
                     setStatus(`Fresh: ${num10}`, false);
 
                     const otpEl = box.querySelector('.otp');
                     const poll = setInterval(async () => {
-                        const q = new URLSearchParams({ api_key: API_KEY, action: 'getStatus', id });
+                        const q = new URLSearchParams({
+                            api_key: API_KEY,
+                            action: 'getStatus',
+                            id: id
+                        });
                         try {
                             const r = await fetch(BASE_URL + '?' + q);
                             const t = (await r.text()).trim();
+                            console.log('Status Response:', t);
                             if (t.startsWith('STATUS_OK')) {
                                 otpEl.textContent = t.split(':')[1] || '----';
                                 otpEl.classList.add('success');
                                 clearInterval(poll);
                             } else if (t !== 'STATUS_WAIT_CODE') {
-                                otpEl.textContent = 'Failed';
+                                otpEl.textContent = 'Failed / ' + t;
                                 clearInterval(poll);
                             }
-                        } catch {}
+                        } catch (e) {
+                            console.error('Poll error:', e);
+                        }
                     }, 2000);
-
                 } else {
-                    setStatus(txt || 'Error', true);
+                    setStatus(txt || 'No number / Error', true);
                 }
-            } catch {
-                setStatus('Net error → retry...', true);
+            } catch (e) {
+                setStatus('Network error → retry...', true);
+                console.error('Fetch error:', e);
             }
         }
+
+        // Initial load
+        updateToggleUI();
+        if (isOn) start();
     </script>
 </body>
 </html>
