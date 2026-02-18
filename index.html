@@ -36,7 +36,7 @@
         const COUNTRY = "22";
         const MAX_PRICE = "80";
 
-        // Sync state keys
+        // Sync keys
         const STATE_KEY = 'hp_isOn';
         const USED_KEY = 'hp_used_numbers';
 
@@ -50,11 +50,11 @@
         function updateToggleUI() {
             toggleBtn.textContent = isOn ? 'OFF Karo' : 'ON Karo';
             toggleBtn.classList.toggle('off', !isOn);
-            statusDiv.textContent = isOn ? 'Auto buy shuru...' : 'Off hai';
+            statusDiv.textContent = isOn ? 'Auto buy fast mode (1 sec)...' : 'Off hai';
             statusDiv.className = isOn ? 'buying' : '';
         }
 
-        // Sync from other tabs
+        // Real-time sync from other tabs (instant)
         window.addEventListener('storage', (e) => {
             if (e.key === STATE_KEY) {
                 isOn = e.newValue === 'true';
@@ -62,13 +62,13 @@
                 if (isOn) start(); else stop();
             } else if (e.key === USED_KEY) {
                 usedNumbers = JSON.parse(e.newValue || '[]');
-                // Optional: Refresh numbers list if needed
+                // Agar zarurat pade to UI refresh kar sakte ho, lekin abhi used check live hai
             }
         });
 
         toggleBtn.onclick = () => {
             isOn = !isOn;
-            localStorage.setItem(STATE_KEY, isOn);  // This triggers storage event in other tabs
+            localStorage.setItem(STATE_KEY, isOn.toString());  // Sab tabs mein sync
             updateToggleUI();
             if (isOn) start(); else stop();
         };
@@ -76,8 +76,8 @@
         let interval = null;
 
         function start() {
-            fetchNumber();
-            interval = setInterval(fetchNumber, 10000);
+            fetchNumber();  // Turant shuru
+            interval = setInterval(fetchNumber, 1000);  // Har 1 second mein try
         }
 
         function stop() {
@@ -92,17 +92,17 @@
         function isFreshValid(fullPhone) {
             fullPhone = fullPhone.trim();
             if (fullPhone.length !== 12 || !fullPhone.startsWith('91') || !/^\d{12}$/.test(fullPhone)) {
-                console.log('Invalid format:', fullPhone);
+                console.log('Invalid:', fullPhone);
                 return false;
             }
             if (usedNumbers.includes(fullPhone)) {
-                console.log('Used number blocked:', fullPhone);
+                console.log('Blocked (used):', fullPhone);
                 return false;
             }
-            // Add to used and save (syncs to other tabs)
+            // Add & sync instantly
             usedNumbers.push(fullPhone);
-            localStorage.setItem(USED_KEY, JSON.stringify(usedNumbers));
-            console.log('Fresh number accepted:', fullPhone);
+            localStorage.setItem(USED_KEY, JSON.stringify(usedNumbers));  // Sab tabs update
+            console.log('Accepted fresh:', fullPhone);
             return true;
         }
 
@@ -127,7 +127,7 @@
 
         async function fetchNumber() {
             if (!isOn) return;
-            setStatus('Fetching number...', false);
+            setStatus('Fetching fast (1 sec mode)...', false);
             const p = new URLSearchParams({
                 api_key: API_KEY,
                 action: 'getNumber',
@@ -138,12 +138,12 @@
             try {
                 const res = await fetch(BASE_URL + '?' + p);
                 const txt = (await res.text()).trim();
-                console.log('API Response:', txt);
+                console.log('API Resp:', txt);
                 if (txt.startsWith('ACCESS_NUMBER')) {
                     const [_, id, full] = txt.split(':');
                     const phone = full.trim();
                     if (!isFreshValid(phone)) {
-                        setStatus('Used ya Invalid → retry...', true);
+                        setStatus('Used/Invalid → next try in 1s', true);
                         return;
                     }
                     const num10 = phone.slice(2);
@@ -157,7 +157,7 @@
                     `;
                     numbersDiv.prepend(box);
                     startTimer(box);
-                    setStatus(`Fresh: ${num10}`, false);
+                    setStatus(`Fresh mila: ${num10}`, false);
 
                     const otpEl = box.querySelector('.otp');
                     const poll = setInterval(async () => {
@@ -169,29 +169,29 @@
                         try {
                             const r = await fetch(BASE_URL + '?' + q);
                             const t = (await r.text()).trim();
-                            console.log('Status Response:', t);
+                            console.log('Status:', t);
                             if (t.startsWith('STATUS_OK')) {
                                 otpEl.textContent = t.split(':')[1] || '----';
                                 otpEl.classList.add('success');
                                 clearInterval(poll);
                             } else if (t !== 'STATUS_WAIT_CODE') {
-                                otpEl.textContent = 'Failed / ' + t;
+                                otpEl.textContent = 'Failed: ' + t;
                                 clearInterval(poll);
                             }
                         } catch (e) {
-                            console.error('Poll error:', e);
+                            console.error('Poll err:', e);
                         }
                     }, 2000);
                 } else {
-                    setStatus(txt || 'No number / Error', true);
+                    setStatus(txt || 'No number/Error', true);
                 }
             } catch (e) {
-                setStatus('Network error → retry...', true);
-                console.error('Fetch error:', e);
+                setStatus('Net error → 1s mein retry', true);
+                console.error('Fetch err:', e);
             }
         }
 
-        // Initial load
+        // Page load pe sync
         updateToggleUI();
         if (isOn) start();
     </script>
