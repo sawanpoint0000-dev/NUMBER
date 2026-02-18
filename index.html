@@ -39,9 +39,11 @@
         // Sync keys
         const STATE_KEY = 'hp_isOn';
         const USED_KEY = 'hp_used_numbers';
+        const ACTIVE_NUMBERS_KEY = 'hp_active_numbers';  // New: saved active boxes
 
         let isOn = localStorage.getItem(STATE_KEY) === 'true';
         let usedNumbers = JSON.parse(localStorage.getItem(USED_KEY) || '[]');
+        let activeNumbers = JSON.parse(localStorage.getItem(ACTIVE_NUMBERS_KEY) || '[]');  // [{id, phone, startTime, otp?}]
 
         const toggleBtn = document.getElementById('toggleBtn');
         const statusDiv = document.getElementById('status');
@@ -54,7 +56,6 @@
             statusDiv.className = isOn ? 'buying' : '';
         }
 
-        // Real-time sync from other tabs (instant)
         window.addEventListener('storage', (e) => {
             if (e.key === STATE_KEY) {
                 isOn = e.newValue === 'true';
@@ -62,13 +63,15 @@
                 if (isOn) start(); else stop();
             } else if (e.key === USED_KEY) {
                 usedNumbers = JSON.parse(e.newValue || '[]');
-                // Agar zarurat pade to UI refresh kar sakte ho, lekin abhi used check live hai
+            } else if (e.key === ACTIVE_NUMBERS_KEY) {
+                activeNumbers = JSON.parse(e.newValue || '[]');
+                renderSavedNumbers();
             }
         });
 
         toggleBtn.onclick = () => {
             isOn = !isOn;
-            localStorage.setItem(STATE_KEY, isOn.toString());  // Sab tabs mein sync
+            localStorage.setItem(STATE_KEY, isOn.toString());
             updateToggleUI();
             if (isOn) start(); else stop();
         };
@@ -76,8 +79,8 @@
         let interval = null;
 
         function start() {
-            fetchNumber();  // Turant shuru
-            interval = setInterval(fetchNumber, 1000);  // Har 1 second mein try
+            fetchNumber();
+            interval = setInterval(fetchNumber, 1000);
         }
 
         function stop() {
@@ -89,40 +92,108 @@
             statusDiv.className = err ? 'error' : (isOn ? 'buying' : '');
         }
 
+        function saveActiveNumbers() {
+            localStorage.setItem(ACTIVE_NUMBERS_KEY, JSON.stringify(activeNumbers));
+        }
+
         function isFreshValid(fullPhone) {
             fullPhone = fullPhone.trim();
-            if (fullPhone.length !== 12 || !fullPhone.startsWith('91') || !/^\d{12}$/.test(fullPhone)) {
-                console.log('Invalid:', fullPhone);
-                return false;
-            }
-            if (usedNumbers.includes(fullPhone)) {
-                console.log('Blocked (used):', fullPhone);
-                return false;
-            }
-            // Add & sync instantly
+            if (fullPhone.length !== 12 || !fullPhone.startsWith('91') || !/^\d{12}$/.test(fullPhone)) return false;
+            if (usedNumbers.includes(fullPhone)) return false;
+
             usedNumbers.push(fullPhone);
-            localStorage.setItem(USED_KEY, JSON.stringify(usedNumbers));  // Sab tabs update
-            console.log('Accepted fresh:', fullPhone);
+            localStorage.setItem(USED_KEY, JSON.stringify(usedNumbers));
             return true;
         }
 
-        function startTimer(box) {
-            let sec = 300;
+        function renderSavedNumbers() {
+            numbersDiv.innerHTML = '';  // Clear current
+            activeNumbers.forEach(item => {
+                const box = createNumberBox(item.phone.slice(2), item.id, item.startTime, item.otp);
+                numbersDiv.appendChild(box);
+                startTimerFromSaved(box, item.startTime);
+                if (item.otp) {
+                    box.querySelector('.otp').textContent = item.otp;
+                    box.querySelector('.otp').classList.add('success');
+                } else {
+                    startPolling(box, item.id);
+                }
+            });
+        }
+
+        function createNumberBox(num10, id, startTime, otp = null) {
+            const box = document.createElement('div');
+            box.className = 'numbox';
+            box.dataset.id = id;
+            box.innerHTML = `
+                <div class="phone10" onclick="navigator.clipboard.writeText('${num10}').then(()=>this.nextElementSibling.textContent='Copied!')">${num10}</div>
+                <button class="copybtn" onclick="navigator.clipboard.writeText('${num10}').then(()=>this.textContent='Copied!')">Copy</button>
+                <div class="otp">${otp ? otp : 'OTP wait...'}</div>
+                <div class="timer">05:00</div>
+            `;
+            if (otp) box.querySelector('.otp').classList.add('success');
+            return box;
+        }
+
+        function startTimerFromSaved(box, startTime) {
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            let remaining = 300 - elapsed;
+            if (remaining <= 0) {
+                box.classList.add('expired');
+                setTimeout(() => box.remove(), 500);
+                removeFromActive(box.dataset.id);
+                return;
+            }
+
             const timer = box.querySelector('.timer');
             const int = setInterval(() => {
-                sec--;
-                const m = Math.floor(sec / 60).toString().padStart(2, '0');
-                const s = (sec % 60).toString().padStart(2, '0');
+                remaining--;
+                const m = Math.floor(remaining / 60).toString().padStart(2, '0');
+                const s = (remaining % 60).toString().padStart(2, '0');
                 timer.textContent = `${m}:${s}`;
-                if (sec <= 0) {
+                if (remaining <= 0) {
                     clearInterval(int);
                     timer.textContent = 'Expired';
                     setTimeout(() => {
                         box.classList.add('expired');
-                        setTimeout(() => box.remove(), 500);
+                        setTimeout(() => {
+                            box.remove();
+                            removeFromActive(box.dataset.id);
+                        }, 500);
                     }, 1000);
                 }
             }, 1000);
+        }
+
+        function removeFromActive(id) {
+            activeNumbers = activeNumbers.filter(item => item.id !== id);
+            saveActiveNumbers();
+        }
+
+        function startPolling(box, id) {
+            const otpEl = box.querySelector('.otp');
+            const poll = setInterval(async () => {
+                const q = new URLSearchParams({ api_key: API_KEY, action: 'getStatus', id });
+                try {
+                    const r = await fetch(BASE_URL + '?' + q);
+                    const t = (await r.text()).trim();
+                    if (t.startsWith('STATUS_OK')) {
+                        const code = t.split(':')[1] || '----';
+                        otpEl.textContent = code;
+                        otpEl.classList.add('success');
+                        clearInterval(poll);
+                        // Update saved
+                        const item = activeNumbers.find(i => i.id === id);
+                        if (item) {
+                            item.otp = code;
+                            saveActiveNumbers();
+                        }
+                    } else if (t !== 'STATUS_WAIT_CODE') {
+                        otpEl.textContent = 'Failed: ' + t;
+                        clearInterval(poll);
+                    }
+                } catch {}
+            }, 2000);
         }
 
         async function fetchNumber() {
@@ -138,61 +209,36 @@
             try {
                 const res = await fetch(BASE_URL + '?' + p);
                 const txt = (await res.text()).trim();
-                console.log('API Resp:', txt);
                 if (txt.startsWith('ACCESS_NUMBER')) {
                     const [_, id, full] = txt.split(':');
                     const phone = full.trim();
                     if (!isFreshValid(phone)) {
-                        setStatus('Used/Invalid → next try in 1s', true);
+                        setStatus('Used/Invalid → next try', true);
                         return;
                     }
                     const num10 = phone.slice(2);
-                    const box = document.createElement('div');
-                    box.className = 'numbox';
-                    box.innerHTML = `
-                        <div class="phone10" onclick="navigator.clipboard.writeText('${num10}').then(()=>this.nextElementSibling.textContent='Copied!')">${num10}</div>
-                        <button class="copybtn" onclick="navigator.clipboard.writeText('${num10}').then(()=>this.textContent='Copied!')">Copy</button>
-                        <div class="otp">OTP wait...</div>
-                        <div class="timer">05:00</div>
-                    `;
-                    numbersDiv.prepend(box);
-                    startTimer(box);
-                    setStatus(`Fresh mila: ${num10}`, false);
+                    const startTime = Date.now();
+                    const item = { id, phone, startTime, otp: null };
+                    activeNumbers.push(item);
+                    saveActiveNumbers();
 
-                    const otpEl = box.querySelector('.otp');
-                    const poll = setInterval(async () => {
-                        const q = new URLSearchParams({
-                            api_key: API_KEY,
-                            action: 'getStatus',
-                            id: id
-                        });
-                        try {
-                            const r = await fetch(BASE_URL + '?' + q);
-                            const t = (await r.text()).trim();
-                            console.log('Status:', t);
-                            if (t.startsWith('STATUS_OK')) {
-                                otpEl.textContent = t.split(':')[1] || '----';
-                                otpEl.classList.add('success');
-                                clearInterval(poll);
-                            } else if (t !== 'STATUS_WAIT_CODE') {
-                                otpEl.textContent = 'Failed: ' + t;
-                                clearInterval(poll);
-                            }
-                        } catch (e) {
-                            console.error('Poll err:', e);
-                        }
-                    }, 2000);
+                    const box = createNumberBox(num10, id, startTime);
+                    numbersDiv.prepend(box);
+                    startTimerFromSaved(box, startTime);
+                    startPolling(box, id);
+
+                    setStatus(`Fresh mila: ${num10}`, false);
                 } else {
                     setStatus(txt || 'No number/Error', true);
                 }
             } catch (e) {
-                setStatus('Net error → 1s mein retry', true);
-                console.error('Fetch err:', e);
+                setStatus('Net error → retry', true);
             }
         }
 
-        // Page load pe sync
+        // On load: restore everything
         updateToggleUI();
+        renderSavedNumbers();
         if (isOn) start();
     </script>
 </body>
